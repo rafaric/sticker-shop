@@ -1,8 +1,26 @@
-import { kv } from '@vercel/kv';
+import { createClient } from 'redis';
 
-// Detectar si estamos en desarrollo (sin variables de entorno de KV)
+// Detectar si estamos en desarrollo (sin variables de entorno de Redis)
 const isProduction = typeof window !== 'undefined' && 
   (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1');
+
+// Configurar cliente Redis (solo en producción o cuando haya variables de entorno)
+let redisClient: any = null;
+const canUseRedis = typeof window === 'undefined' || (
+  import.meta.env.VITE_REDIS_URL || 
+  import.meta.env.REDIS_URL
+);
+
+if (canUseRedis && isProduction) {
+  try {
+    redisClient = createClient({
+      url: import.meta.env.VITE_REDIS_URL || import.meta.env.REDIS_URL
+    });
+    redisClient.connect().catch(console.error);
+  } catch (error) {
+    console.warn('Redis no disponible, usando localStorage', error);
+  }
+}
 
 export interface Product {
   id: number;
@@ -74,16 +92,16 @@ class DatabaseManager {
 
   private async getTable(table: string): Promise<any[]> {
     try {
-      // Solo intentar usar KV en producción
-      if (isProduction) {
-        const data = await kv.get(table);
-        return data ? (data as any[]) : [];
+      // Intentar usar Redis en producción
+      if (isProduction && redisClient?.isOpen) {
+        const data = await redisClient.get(table);
+        return data ? JSON.parse(data) : [];
       }
       // En desarrollo, usar localStorage directamente
       const localData = localStorage.getItem(table);
       return localData ? JSON.parse(localData) : [];
     } catch (error) {
-      // Fallback to localStorage for development
+      // Fallback to localStorage
       const localData = localStorage.getItem(table);
       return localData ? JSON.parse(localData) : [];
     }
@@ -91,14 +109,14 @@ class DatabaseManager {
 
   private async setTable(table: string, data: any[]): Promise<void> {
     try {
-      // Solo intentar usar KV en producción
-      if (isProduction) {
-        await kv.set(table, data);
+      // Intentar usar Redis en producción
+      if (isProduction && redisClient?.isOpen) {
+        await redisClient.set(table, JSON.stringify(data));
       }
       // Siempre guardar en localStorage como backup
       localStorage.setItem(table, JSON.stringify(data));
     } catch (error) {
-      // Fallback to localStorage for development
+      // Fallback to localStorage
       localStorage.setItem(table, JSON.stringify(data));
     }
   }
@@ -404,13 +422,13 @@ class DatabaseManager {
     
     for (const table of tables) {
       try {
-        // Solo intentar borrar de KV en producción
-        if (isProduction) {
-          await kv.del(table);
+        // Intentar borrar de Redis en producción
+        if (isProduction && redisClient?.isOpen) {
+          await redisClient.del(table);
         }
         localStorage.removeItem(table);
       } catch (error) {
-        // Solo limpia localStorage si falla KV
+        // Solo limpia localStorage si falla Redis
         localStorage.removeItem(table);
       }
     }

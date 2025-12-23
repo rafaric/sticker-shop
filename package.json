@@ -24,6 +24,7 @@
     "chartjs-adapter-date-fns": "^3.0.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.562.0",
+    "redis": "^5.10.0",
     "sonner": "^2.0.7"
   }
 }
