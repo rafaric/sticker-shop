@@ -1,24 +1,25 @@
-import { createClient } from 'redis';
+import { Redis } from '@upstash/redis';
 
-// Detectar si estamos en desarrollo (sin variables de entorno de Redis)
+// Detectar si estamos en producción
 const isProduction = typeof window !== 'undefined' && 
   (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1');
 
-// Configurar cliente Redis (solo en producción o cuando haya variables de entorno)
-let redisClient: any = null;
-const canUseRedis = typeof window === 'undefined' || (
-  import.meta.env.VITE_REDIS_URL || 
-  import.meta.env.REDIS_URL
-);
+// Configurar Upstash Redis (funciona en el navegador con HTTP)
+let redis: Redis | null = null;
 
-if (canUseRedis && isProduction) {
+// Inicializar Redis si hay variables de entorno
+const redisUrl = import.meta.env.VITE_UPSTASH_REDIS_REST_URL;
+const redisToken = import.meta.env.VITE_UPSTASH_REDIS_REST_TOKEN;
+
+if (redisUrl && redisToken && isProduction) {
   try {
-    redisClient = createClient({
-      url: import.meta.env.VITE_REDIS_URL || import.meta.env.REDIS_URL
+    redis = new Redis({
+      url: redisUrl,
+      token: redisToken,
     });
-    redisClient.connect().catch(console.error);
+    console.log('Upstash Redis conectado');
   } catch (error) {
-    console.warn('Redis no disponible, usando localStorage', error);
+    console.warn('Error al conectar Redis, usando localStorage:', error);
   }
 }
 
@@ -92,32 +93,33 @@ class DatabaseManager {
 
   private async getTable(table: string): Promise<any[]> {
     try {
-      // Intentar usar Redis en producción
-      if (isProduction && redisClient?.isOpen) {
-        const data = await redisClient.get(table);
-        return data ? JSON.parse(data) : [];
+      // Intentar usar Upstash Redis en producción
+      if (redis && isProduction) {
+        const data = await redis.get<any[]>(table);
+        if (data) {
+          return Array.isArray(data) ? data : [];
+        }
       }
-      // En desarrollo, usar localStorage directamente
-      const localData = localStorage.getItem(table);
-      return localData ? JSON.parse(localData) : [];
     } catch (error) {
-      // Fallback to localStorage
-      const localData = localStorage.getItem(table);
-      return localData ? JSON.parse(localData) : [];
+      console.warn(`Error al leer de Redis (${table}):`, error);
     }
+    
+    // Fallback a localStorage
+    const localData = localStorage.getItem(table);
+    return localData ? JSON.parse(localData) : [];
   }
 
   private async setTable(table: string, data: any[]): Promise<void> {
+    // Siempre guardar en localStorage como backup
+    localStorage.setItem(table, JSON.stringify(data));
+    
     try {
-      // Intentar usar Redis en producción
-      if (isProduction && redisClient?.isOpen) {
-        await redisClient.set(table, JSON.stringify(data));
+      // Guardar en Upstash Redis en producción
+      if (redis && isProduction) {
+        await redis.set(table, data);
       }
-      // Siempre guardar en localStorage como backup
-      localStorage.setItem(table, JSON.stringify(data));
     } catch (error) {
-      // Fallback to localStorage
-      localStorage.setItem(table, JSON.stringify(data));
+      console.warn(`Error al guardar en Redis (${table}):`, error);
     }
   }
 
@@ -181,7 +183,6 @@ class DatabaseManager {
     reservation.status = 'completed';
     await this.setTable('reservations', reservations);
     
-    const remainingAmount = reservation.total - reservation.advance_payment;
     const products = await this.getTable('products');
     const product = products.find(p => p.id === reservation.product_id);
     
@@ -404,7 +405,7 @@ class DatabaseManager {
     
     return Object.values(report).map((item: any) => ({
       ...item,
-      avg_price: item.prices.reduce((sum, price) => sum + price, 0) / item.prices.length
+      avg_price: item.prices.reduce((sum: number, price: number) => sum + price, 0) / item.prices.length
     })).sort((a: any, b: any) => b.total_revenue - a.total_revenue);
   }
 
@@ -421,15 +422,15 @@ class DatabaseManager {
     const tables = ['products', 'sales', 'purchases', 'reservations', 'printing_plates', 'fixed_costs', 'fixed_cost_entries'];
     
     for (const table of tables) {
+      localStorage.removeItem(table);
+      
       try {
-        // Intentar borrar de Redis en producción
-        if (isProduction && redisClient?.isOpen) {
-          await redisClient.del(table);
+        // Borrar de Redis en producción
+        if (redis && isProduction) {
+          await redis.del(table);
         }
-        localStorage.removeItem(table);
       } catch (error) {
-        // Solo limpia localStorage si falla Redis
-        localStorage.removeItem(table);
+        console.warn(`Error al borrar de Redis (${table}):`, error);
       }
     }
     

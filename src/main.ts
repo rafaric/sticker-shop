@@ -1,8 +1,5 @@
 import './style.css';
 import { db } from './database-kv';
-import { initializeSampleData } from './sample-data';
-import { ShoppingCart, Package, TrendingUp, BarChart3, Plus, Minus, Printer, DollarSign } from 'lucide-react';
-
 import { resetDatabase } from './sample-data';
 
 // Simple toast implementation
@@ -209,8 +206,9 @@ class App {
     const customerName = formData.get('customer_name') as string;
     const quantity = parseInt(formData.get('quantity') as string);
     const unitPrice = parseFloat(formData.get('unit_price') as string);
+    const isFullPayment = formData.get('full_payment') === 'on';
     const total = quantity * unitPrice;
-    const advancePayment = total * 0.5;
+    const advancePayment = isFullPayment ? total : total * 0.5;
     
     await db.addReservation({
       product_id: productId,
@@ -222,7 +220,8 @@ class App {
       status: 'pending'
     });
     
-    toast.success('Reserva creada exitosamente');
+    const paymentType = isFullPayment ? 'pago completo' : '50% adelanto';
+    toast.success(`Reserva creada exitosamente (${paymentType})`);
     await this.loadData();
     this.render();
   }
@@ -604,8 +603,8 @@ class App {
     return `
       <div class="space-y-6">
         <div class="bg-white rounded-lg shadow p-6">
-          <h2 class="text-lg font-semibold mb-4">Nueva Reserva (50% Adelanto)</h2>
-          <form data-form="add-reservation" class="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <h2 class="text-lg font-semibold mb-4">Nueva Reserva</h2>
+          <form data-form="add-reservation" class="grid grid-cols-1 md:grid-cols-6 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Producto</label>
               <select name="product_id" id="reservation-product" required class="border rounded-md px-3 py-2 w-full">
@@ -626,6 +625,13 @@ class App {
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Precio unitario</label>
               <input type="number" name="unit_price" id="reservation-price" step="0.01" required class="border rounded-md px-3 py-2 w-full">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Tipo de pago</label>
+              <div class="flex items-center h-10">
+                <input type="checkbox" name="full_payment" id="full-payment-checkbox" class="h-4 w-4 text-orange-600 rounded mr-2">
+                <label for="full-payment-checkbox" class="text-sm text-gray-700">Pago completo</label>
+              </div>
             </div>
             <div class="flex items-end">
               <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700 w-full">
@@ -655,6 +661,7 @@ class App {
                 ${this.reservations.map(reservation => {
                   const product = this.products.find(p => p.id === reservation.product_id);
                   const remaining = reservation.total - reservation.advance_payment;
+                  const isFullPayment = reservation.advance_payment === reservation.total;
                   return `
                     <tr>
                       <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
@@ -664,7 +671,15 @@ class App {
                         ${product?.name || 'Producto eliminado'}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${reservation.total.toFixed(2)}</td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">$${reservation.advance_payment.toFixed(2)}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <span class="font-medium ${isFullPayment ? 'text-blue-600' : 'text-green-600'}">
+                          $${reservation.advance_payment.toFixed(2)}
+                        </span>
+                        ${isFullPayment ? 
+                          '<span class="ml-1 text-xs text-blue-600">(Completo)</span>' : 
+                          `<span class="ml-1 text-xs text-gray-500">(Resta: $${remaining.toFixed(2)})</span>`
+                        }
+                      </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                           reservation.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
@@ -676,7 +691,7 @@ class App {
                         ${reservation.status === 'pending' ? `
                           <button data-action="complete-reservation" data-reservation-id="${reservation.id}" 
                                   class="text-green-600 hover:text-green-900">
-                            Completar ($${remaining.toFixed(2)})
+                            ${isFullPayment ? 'Marcar como entregada' : `Completar ($${remaining.toFixed(2)})`}
                           </button>
                         ` : ''}
                       </td>
@@ -883,7 +898,7 @@ class App {
 
   private renderPurchases() {
     // Calculate stock needed for pending reservations
-    const stockNeeded = {};
+    const stockNeeded: Record<number, number> = {};
     this.reservations.filter(r => r.status === 'pending').forEach(reservation => {
       if (!stockNeeded[reservation.product_id]) {
         stockNeeded[reservation.product_id] = 0;
