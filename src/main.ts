@@ -146,6 +146,9 @@ class App {
       case 'complete-reservation':
         await this.completeReservation(parseInt(element.dataset.reservationId!));
         break;
+      case 'cancel-reservation':
+        await this.cancelReservation(parseInt(element.dataset.reservationId!));
+        break;
       case 'edit-product':
         this.editProduct(parseInt(element.dataset.productId!));
         break;
@@ -210,9 +213,26 @@ class App {
     const designMotif = formData.get('design_motif') as string;
     const quantity = parseInt(formData.get('quantity') as string);
     const unitPrice = parseFloat(formData.get('unit_price') as string);
-    const isFullPayment = formData.get('full_payment') === 'on';
+    const paymentType = formData.get('payment_type') as string;
     const total = quantity * unitPrice;
-    const advancePayment = isFullPayment ? total : total * 0.5;
+    
+    let advancePayment = 0;
+    let paymentLabel = '';
+    
+    switch(paymentType) {
+      case 'no_advance':
+        advancePayment = 0;
+        paymentLabel = 'sin seña';
+        break;
+      case 'advance':
+        advancePayment = total * 0.5;
+        paymentLabel = 'con seña (50%)';
+        break;
+      case 'full':
+        advancePayment = total;
+        paymentLabel = 'pago completo';
+        break;
+    }
     
     await db.addReservation({
       product_id: productId,
@@ -225,8 +245,7 @@ class App {
       status: 'pending'
     });
     
-    const paymentType = isFullPayment ? 'pago completo' : '50% adelanto';
-    toast.success(`Reserva creada exitosamente (${paymentType})`);
+    toast.success(`Reserva creada exitosamente (${paymentLabel})`);
     await this.loadData();
     this.render();
   }
@@ -237,6 +256,18 @@ class App {
       toast.success('Reserva completada!');
     } else {
       toast.error('No se pudo completar la reserva');
+    }
+    
+    await this.loadData();
+    this.render();
+  }
+
+  private async cancelReservation(reservationId: number) {
+    const success = await db.cancelReservation(reservationId);
+    if (success) {
+      toast.success('Reserva cancelada');
+    } else {
+      toast.error('No se pudo cancelar la reserva');
     }
     
     await this.loadData();
@@ -637,10 +668,11 @@ class App {
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Tipo de pago</label>
-              <div class="flex items-center h-10">
-                <input type="checkbox" name="full_payment" id="full-payment-checkbox" class="h-4 w-4 text-orange-600 rounded mr-2">
-                <label for="full-payment-checkbox" class="text-sm text-gray-700">Pago completo</label>
-              </div>
+              <select name="payment_type" required class="border rounded-md px-3 py-2 w-full">
+                <option value="no_advance">Sin seña</option>
+                <option value="advance" selected>Con seña (50%)</option>
+                <option value="full">Pago completo</option>
+              </select>
             </div>
             <div class="flex items-end">
               <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700 w-full">
@@ -685,27 +717,40 @@ class App {
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${reservation.total.toFixed(2)}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        <span class="font-medium ${isFullPayment ? 'text-blue-600' : 'text-green-600'}">
-                          $${reservation.advance_payment.toFixed(2)}
-                        </span>
-                        ${isFullPayment ? 
-                          '<span class="ml-1 text-xs text-blue-600">(Completo)</span>' : 
-                          `<span class="ml-1 text-xs text-gray-500">(Resta: $${remaining.toFixed(2)})</span>`
+                        ${reservation.advance_payment === 0 ? 
+                          '<span class="font-medium text-gray-400">Sin seña</span>' :
+                          `<span class="font-medium ${isFullPayment ? 'text-blue-600' : 'text-green-600'}">
+                            $${reservation.advance_payment.toFixed(2)}
+                          </span>
+                          ${isFullPayment ? 
+                            '<span class="ml-1 text-xs text-blue-600">(Completo)</span>' : 
+                            `<span class="ml-1 text-xs text-gray-500">(Resta: $${remaining.toFixed(2)})</span>`
+                          }`
                         }
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          reservation.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                          reservation.status === 'completed' ? 'bg-green-100 text-green-800' : 
+                          reservation.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                          'bg-yellow-100 text-yellow-800'
                         }">
-                          ${reservation.status === 'completed' ? 'Completada' : 'Pendiente'}
+                          ${reservation.status === 'completed' ? 'Completada' : 
+                            reservation.status === 'cancelled' ? 'Cancelada' : 
+                            'Pendiente'}
                         </span>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         ${reservation.status === 'pending' ? `
-                          <button data-action="complete-reservation" data-reservation-id="${reservation.id}" 
-                                  class="text-green-600 hover:text-green-900">
-                            ${isFullPayment ? 'Marcar como entregada' : `Completar ($${remaining.toFixed(2)})`}
-                          </button>
+                          <div class="flex gap-2">
+                            <button data-action="complete-reservation" data-reservation-id="${reservation.id}" 
+                                    class="text-green-600 hover:text-green-900">
+                              ${isFullPayment ? 'Marcar como entregada' : reservation.advance_payment === 0 ? `Completar ($${reservation.total.toFixed(2)})` : `Completar ($${remaining.toFixed(2)})`}
+                            </button>
+                            <button data-action="cancel-reservation" data-reservation-id="${reservation.id}" 
+                                    class="text-red-600 hover:text-red-900">
+                              Cancelar
+                            </button>
+                          </div>
                         ` : ''}
                       </td>
                     </tr>

@@ -243,6 +243,36 @@ class DatabaseManager {
     return true;
   }
 
+  async cancelReservation(reservationId: number): Promise<boolean> {
+    const reservations = await this.getTable('reservations');
+    const reservation = reservations.find(r => r.id === reservationId);
+    
+    if (!reservation || reservation.status !== 'pending') return false;
+    
+    reservation.status = 'cancelled';
+    await this.setTable('reservations', reservations);
+    
+    // Si la reserva tenía seña, registrarla como ingreso (sin devolución)
+    if (reservation.advance_payment > 0) {
+      const products = await this.getTable('products');
+      const product = products.find(p => p.id === reservation.product_id);
+      
+      if (product) {
+        // Registrar la seña como venta (ingreso no reembolsable)
+        await this.addSale({
+          product_id: reservation.product_id,
+          quantity: 0, // 0 unidades porque es una seña retenida
+          unit_price: 0,
+          unit_cost: 0,
+          total: reservation.advance_payment,
+          reservation_id: reservationId
+        });
+      }
+    }
+    
+    return true;
+  }
+
   // Sales
   async getSales(): Promise<Sale[]> {
     const sales = await this.getTable('sales');
