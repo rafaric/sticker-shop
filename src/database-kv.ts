@@ -7,20 +7,40 @@ const isProduction = typeof window !== 'undefined' &&
 // Configurar Upstash Redis (funciona en el navegador con HTTP)
 let redis: Redis | null = null;
 
-// Inicializar Redis si hay variables de entorno
-const redisUrl = import.meta.env.VITE_UPSTASH_REDIS_REST_URL;
-const redisToken = import.meta.env.VITE_UPSTASH_REDIS_REST_TOKEN;
+// Inicializar Redis - Vercel proporciona estas variables automáticamente con el plugin de Upstash
+// Primero intentamos las variables personalizadas, luego las de Vercel
+const redisUrl = import.meta.env.VITE_UPSTASH_REDIS_REST_URL || 
+                 import.meta.env.VITE_KV_REST_API_URL;
+const redisToken = import.meta.env.VITE_UPSTASH_REDIS_REST_TOKEN || 
+                   import.meta.env.VITE_KV_REST_API_TOKEN;
 
-if (redisUrl && redisToken && isProduction) {
-  try {
-    redis = new Redis({
-      url: redisUrl,
-      token: redisToken,
-    });
-    console.log('Upstash Redis conectado');
-  } catch (error) {
-    console.warn('Error al conectar Redis, usando localStorage:', error);
+console.log('🔍 Detectando entorno:', {
+  isProduction,
+  hostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown',
+  hasRedisUrl: !!redisUrl,
+  hasRedisToken: !!redisToken,
+  redisUrlPrefix: redisUrl ? redisUrl.substring(0, 30) + '...' : 'undefined',
+  urlProtocol: redisUrl ? new URL(redisUrl).protocol : 'N/A'
+});
+
+if (redisUrl && redisToken) {
+  // Verificar que la URL sea HTTPS (REST API)
+  if (!redisUrl.startsWith('https://')) {
+    console.error('❌ URL de Redis incorrecta. Debe comenzar con https://, recibido:', redisUrl);
+    console.warn('⚠️ Usando solo localStorage');
+  } else {
+    try {
+      redis = new Redis({
+        url: redisUrl,
+        token: redisToken,
+      });
+      console.log('✅ Upstash Redis inicializado correctamente');
+    } catch (error) {
+      console.error('❌ Error al conectar Redis:', error);
+    }
   }
+} else {
+  console.warn('⚠️ Variables de Redis no encontradas, usando solo localStorage');
 }
 
 export interface Product {
@@ -38,6 +58,7 @@ export interface Reservation {
   id: number;
   product_id: number;
   customer_name: string;
+  design_motif?: string;
   quantity: number;
   unit_price: number;
   advance_payment: number;
@@ -86,45 +107,67 @@ export interface FixedCost {
 }
 
 class DatabaseManager {
+  constructor() {
+    this.initializeFixedCosts();
+  }
+
   private async getNextId(table: string): Promise<number> {
     const data = await this.getTable(table);
     return data.length > 0 ? Math.max(...data.map((item: any) => item.id)) + 1 : 1;
   }
 
   private async getTable(table: string): Promise<any[]> {
-    try {
-      // Intentar usar Upstash Redis en producción
-      if (redis && isProduction) {
-        const data = await redis.get<any[]>(table);
-        if (data) {
-          return Array.isArray(data) ? data : [];
-        }
-      }
-    } catch (error) {
-      console.warn(`Error al leer de Redis (${table}):`, error);
+    if (!redis) {
+      console.error('❌ Redis no está configurado');
+      return [];
     }
-    
-    // Fallback a localStorage
-    const localData = localStorage.getItem(table);
-    return localData ? JSON.parse(localData) : [];
+
+    try {
+      console.log(`📖 Leyendo de Redis: ${table}`);
+      const data = await redis.get<any[]>(table);
+      if (data && Array.isArray(data)) {
+        console.log(`✅ Datos leídos de Redis (${table}):`, data.length, 'items');
+        return data;
+      }
+      console.log(`ℹ️ No hay datos en Redis para ${table}`);
+      return [];
+    } catch (error) {
+      console.error(`❌ Error al leer de Redis (${table}):`, error);
+      return [];
+    }
   }
 
   private async setTable(table: string, data: any[]): Promise<void> {
-    // Siempre guardar en localStorage como backup
-    localStorage.setItem(table, JSON.stringify(data));
-    
+    if (!redis) {
+      console.error('❌ Redis no está configurado, no se pueden guardar datos');
+      throw new Error('Redis no está configurado');
+    }
+
     try {
-      // Guardar en Upstash Redis en producción
-      if (redis && isProduction) {
-        await redis.set(table, data);
+      console.log(`💾 Guardando en Redis: ${table} (${data.length} items)`);
+      
+      // Intentar guardar con retry
+      let retries = 3;
+      let saved = false;
+      
+      while (retries > 0 && !saved) {
+        try {
+          const result = await redis.set(table, data);
+          saved = true;
+          console.log(`✅ Guardado exitoso en Redis: ${table}`, { result });
+        } catch (retryError) {
+          retries--;
+          if (retries === 0) {
+            throw retryError;
+          }
+          console.warn(`⚠️ Error al guardar (${table}), reintentando... (${retries} intentos restantes)`, retryError);
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
       }
     } catch (error) {
-      console.warn(`Error al guardar en Redis (${table}):`, error);
+      console.error(`❌ Error FINAL al guardar en Redis (${table}):`, error);
+      throw error;
     }
-  }
-
-  constructor() {
-    this.initializeFixedCosts();
   }
 
   // Products
@@ -419,22 +462,24 @@ class DatabaseManager {
 
   // Método para limpiar todas las tablas
   async clearAllTables(): Promise<void> {
+    if (!redis) {
+      console.error('❌ Redis no está configurado');
+      return;
+    }
+
     const tables = ['products', 'sales', 'purchases', 'reservations', 'printing_plates', 'fixed_costs', 'fixed_cost_entries'];
     
+    console.log('🗑️ Limpiando todas las tablas de Redis...');
     for (const table of tables) {
-      localStorage.removeItem(table);
-      
       try {
-        // Borrar de Redis en producción
-        if (redis && isProduction) {
-          await redis.del(table);
-        }
+        await redis.del(table);
+        console.log(`✅ Tabla ${table} eliminada`);
       } catch (error) {
-        console.warn(`Error al borrar de Redis (${table}):`, error);
+        console.error(`❌ Error al borrar ${table} de Redis:`, error);
       }
     }
     
-    console.log('Todas las tablas han sido limpiadas');
+    console.log('✅ Todas las tablas han sido limpiadas de Redis');
   }
 }
 

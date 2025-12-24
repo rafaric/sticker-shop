@@ -50,13 +50,21 @@ export async function resetDatabase() {
   console.log('Productos agregados:', sampleProducts.length);
 }
 
-// Función para inicializar datos (mantener compatibilidad)
+// Función para inicializar datos solo si la base de datos está completamente vacía
+// IMPORTANTE: Ya no resetea automáticamente, solo inicializa en primera instalación
 export async function initializeSampleData() {
   const existingProducts = await db.getProducts();
   
   if (existingProducts.length === 0) {
-    await resetDatabase();
+    console.log('🆕 Primera inicialización: agregando productos base');
+    
+    // Solo agregar productos, sin limpiar nada
+    for (const product of sampleProducts) {
+      await db.addProduct(product);
+    }
+    
+    console.log('✅ Productos base agregados:', sampleProducts.length);
   } else {
-    console.log('La base de datos ya contiene productos.');
+    console.log('✅ Base de datos ya inicializada con', existingProducts.length, 'productos');
   }
 }

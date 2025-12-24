@@ -1,6 +1,6 @@
 import './style.css';
 import { db } from './database-kv';
-import { resetDatabase } from './sample-data';
+import { resetDatabase, initializeSampleData } from './sample-data';
 
 // Simple toast implementation
 const toast = {
@@ -79,16 +79,19 @@ class App {
   }
 
   private async initializeApp() {
-    // Solo resetear en primera carga o si se fuerza con flag
+    // Solo permitir reset manual con ?reset en la URL
     const shouldReset = new URLSearchParams(window.location.search).has('reset');
-    const isFirstTime = !localStorage.getItem('app_initialized');
     
-    if (shouldReset || isFirstTime) {
+    if (shouldReset) {
+      console.log('🔄 Reset manual solicitado');
       await resetDatabase();
-      localStorage.setItem('app_initialized', 'true');
-      console.log('Base de datos inicializada');
+      // Recargar sin el parámetro reset
+      window.location.href = window.location.pathname;
+      return;
     }
     
+    // Cargar datos existentes o inicializar si es completamente nuevo
+    await initializeSampleData();
     await this.loadData();
     this.render();
     this.setupEventListeners();
@@ -204,6 +207,7 @@ class App {
   private async addReservation(formData: FormData) {
     const productId = parseInt(formData.get('product_id') as string);
     const customerName = formData.get('customer_name') as string;
+    const designMotif = formData.get('design_motif') as string;
     const quantity = parseInt(formData.get('quantity') as string);
     const unitPrice = parseFloat(formData.get('unit_price') as string);
     const isFullPayment = formData.get('full_payment') === 'on';
@@ -213,6 +217,7 @@ class App {
     await db.addReservation({
       product_id: productId,
       customer_name: customerName,
+      design_motif: designMotif || undefined,
       quantity,
       unit_price: unitPrice,
       advance_payment: advancePayment,
@@ -619,6 +624,10 @@ class App {
               <input type="text" name="customer_name" required class="border rounded-md px-3 py-2 w-full">
             </div>
             <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Motivo del estampado</label>
+              <input type="text" name="design_motif" placeholder="Ej: Logo, texto, imagen..." class="border rounded-md px-3 py-2 w-full">
+            </div>
+            <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
               <input type="number" name="quantity" min="1" required class="border rounded-md px-3 py-2 w-full">
             </div>
@@ -651,6 +660,7 @@ class App {
                 <tr>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Motivo</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Adelanto</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
@@ -669,6 +679,9 @@ class App {
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         ${product?.name || 'Producto eliminado'}
+                      </td>
+                      <td class="px-6 py-4 text-sm text-gray-500">
+                        ${reservation.design_motif || '-'}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${reservation.total.toFixed(2)}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
