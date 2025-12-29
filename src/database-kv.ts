@@ -46,7 +46,7 @@ if (redisUrl && redisToken) {
 export interface Product {
   id: number;
   name: string;
-  category: 'remeras' | 'totebags' | 'stickers';
+  category: string;
   price: number;
   stock: number;
   cost: number;

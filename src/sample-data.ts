@@ -3,21 +3,21 @@ import { db } from './database-kv';
 // Productos simplificados según los nuevos requerimientos
 const sampleProducts = [
   // Remeras por talle
-  { name: 'Remera XS', category: 'remeras' as const, price: 3500, stock: 0, cost: 1500, size: 'xs' },
-  { name: 'Remera S', category: 'remeras' as const, price: 3500, stock: 0, cost: 1500, size: 's' },
-  { name: 'Remera M', category: 'remeras' as const, price: 3500, stock: 0, cost: 1500, size: 'm' },
-  { name: 'Remera L', category: 'remeras' as const, price: 3500, stock: 0, cost: 1500, size: 'l' },
-  { name: 'Remera XL', category: 'remeras' as const, price: 3500, stock: 0, cost: 1500, size: 'xl' },
-  { name: 'Remera 2XL', category: 'remeras' as const, price: 4000, stock: 0, cost: 1700, size: '2xl' },
-  { name: 'Remera 3XL', category: 'remeras' as const, price: 4000, stock: 0, cost: 1700, size: '3xl' },
+  { name: 'Remera XS', category: 'remeras', price: 3500, stock: 0, cost: 1500, size: 'xs' },
+  { name: 'Remera S', category: 'remeras', price: 3500, stock: 0, cost: 1500, size: 's' },
+  { name: 'Remera M', category: 'remeras', price: 3500, stock: 0, cost: 1500, size: 'm' },
+  { name: 'Remera L', category: 'remeras', price: 3500, stock: 0, cost: 1500, size: 'l' },
+  { name: 'Remera XL', category: 'remeras', price: 3500, stock: 0, cost: 1500, size: 'xl' },
+  { name: 'Remera 2XL', category: 'remeras', price: 4000, stock: 0, cost: 1700, size: '2xl' },
+  { name: 'Remera 3XL', category: 'remeras', price: 4000, stock: 0, cost: 1700, size: '3xl' },
   
   // Totebags
-  { name: 'Totebag Chica', category: 'totebags' as const, price: 4000, stock: 0, cost: 1800, size: 'chica' },
-  { name: 'Totebag Grande', category: 'totebags' as const, price: 4500, stock: 0, cost: 2100, size: 'grande' },
+  { name: 'Totebag Chica', category: 'totebags', price: 4000, stock: 0, cost: 1800, size: 'chica' },
+  { name: 'Totebag Grande', category: 'totebags', price: 4500, stock: 0, cost: 2100, size: 'grande' },
   
   // Stickers (el costo se calcula al imprimir la plancha)
-  { name: 'Sticker Chico', category: 'stickers' as const, price: 300, stock: 0, cost: 0, size: 'chico' },
-  { name: 'Sticker Grande', category: 'stickers' as const, price: 500, stock: 0, cost: 0, size: 'grande' }
+  { name: 'Sticker Chico', category: 'stickers', price: 300, stock: 0, cost: 0, size: 'chico' },
+  { name: 'Sticker Grande', category: 'stickers', price: 500, stock: 0, cost: 0, size: 'grande' }
 ];
 
 // Función para resetear la base de datos

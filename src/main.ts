@@ -34,7 +34,7 @@ function showToast(message: string, type: 'success' | 'error') {
 type Product = {
   id: number;
   name: string;
-  category: 'remeras' | 'totebags' | 'stickers';
+  category: string;
   price: number;
   stock: number;
   cost: number;
@@ -188,7 +188,7 @@ class App {
   }
 
   private async addProduct(formData: FormData) {
-    const category = formData.get('category') as 'remeras' | 'totebags' | 'stickers';
+    const category = (formData.get('category') as string).toLowerCase().trim();
     const cost = parseFloat(formData.get('cost') as string);
     const size = formData.get('size') as string;
     
@@ -408,7 +408,7 @@ class App {
     
     const updates = {
       name: formData.get('name') as string,
-      category: formData.get('category') as 'remeras' | 'totebags' | 'stickers',
+      category: (formData.get('category') as string).toLowerCase().trim(),
       price: parseFloat(formData.get('price') as string),
       cost: parseFloat(formData.get('cost') as string),
       size: formData.get('size') as string || undefined
@@ -555,12 +555,19 @@ class App {
               </div>
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-1">Categoría</label>
-                <select name="category" required class="border rounded-md px-3 py-2 w-full">
-                  <option value="">Seleccionar categoría</option>
-                  <option value="remeras" ${this.editingProduct?.category === 'remeras' ? 'selected' : ''}>Remera</option>
-                  <option value="totebags" ${this.editingProduct?.category === 'totebags' ? 'selected' : ''}>Totebag</option>
-                  <option value="stickers" ${this.editingProduct?.category === 'stickers' ? 'selected' : ''}>Sticker</option>
-                </select>
+                <input 
+                  type="text" 
+                  name="category" 
+                  value="${this.editingProduct?.category || ''}" 
+                  list="categories-list" 
+                  required 
+                  placeholder="Seleccionar o escribir nueva"
+                  class="border rounded-md px-3 py-2 w-full">
+                <datalist id="categories-list">
+                  ${[...new Set(this.products.map(p => p.category))].sort().map(cat => `
+                    <option value="${cat}">${cat.charAt(0).toUpperCase() + cat.slice(1)}</option>
+                  `).join('')}
+                </datalist>
               </div>
             </div>
             
@@ -658,7 +665,7 @@ class App {
           <form data-form="add-reservation" class="grid grid-cols-1 md:grid-cols-6 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Producto</label>
-              <select name="product_id" id="reservation-product" required class="border rounded-md px-3 py-2 w-full">
+              <select name="product_id" id="reservation-product" required class="border rounded-md px-3 py-2 pr-10 w-full">
                 <option value="">Seleccionar producto</option>
                 ${this.products.map(product => `
                   <option value="${product.id}" data-price="${product.price}">${product.name} - $${product.price}</option>
@@ -683,7 +690,7 @@ class App {
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Tipo de pago</label>
-              <select name="payment_type" required class="border rounded-md px-3 py-2 w-full">
+              <select name="payment_type" required class="border rounded-md px-3 py-2 pr-10 w-full">
                 <option value="no_advance">Sin seña</option>
                 <option value="advance" selected>Con seña (50%)</option>
                 <option value="full">Pago completo</option>
@@ -906,7 +913,7 @@ class App {
           <form data-form="add-sale" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Producto</label>
-              <select name="product_id" id="sale-product" required class="border rounded-md px-3 py-2 w-full">
+              <select name="product_id" id="sale-product" required class="border rounded-md px-3 py-2 pr-10 w-full">
                 <option value="">Seleccionar producto</option>
                 ${this.products.map(product => `
                   <option value="${product.id}" data-price="${product.price}">${product.name} - $${product.price} (Stock: ${product.stock})</option>
@@ -1016,7 +1023,7 @@ class App {
           <form data-form="add-purchase" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Producto</label>
-              <select name="product_id" id="purchase-product" required class="border rounded-md px-3 py-2 w-full">
+              <select name="product_id" id="purchase-product" required class="border rounded-md pl-3 pr-10 py-2 w-full">
                 <option value="">Seleccionar producto</option>
                 ${this.products.filter(product => product.category !== 'stickers').map(product => {
                   const needed = stockNeeded[product.id] || 0;
@@ -1093,7 +1100,7 @@ class App {
           <form data-form="apply-fixed-cost" class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Costo fijo</label>
-              <select name="fixed_cost_id" required class="border rounded-md px-3 py-2 w-full">
+              <select name="fixed_cost_id" required class="border rounded-md px-3 py-2 pr-10 w-full">
                 <option value="">Seleccionar costo</option>
                 ${this.fixedCosts.map(cost => `
                   <option value="${cost.id}">${cost.name} - $${cost.cost}</option>
