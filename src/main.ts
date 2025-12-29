@@ -466,6 +466,21 @@ class App {
         }
       });
     }
+    
+    // Autocomplete para compras
+    const purchaseProduct = document.getElementById('purchase-product') as HTMLSelectElement;
+    const purchaseCost = document.getElementById('purchase-cost') as HTMLInputElement;
+    
+    if (purchaseProduct && purchaseCost) {
+      purchaseProduct.addEventListener('change', (e) => {
+        const select = e.target as HTMLSelectElement;
+        const selectedOption = select.options[select.selectedIndex];
+        const cost = selectedOption.dataset.cost;
+        if (cost) {
+          purchaseCost.value = cost;
+        }
+      });
+    }
   }
 
   private renderNavigation() {
@@ -1001,14 +1016,14 @@ class App {
           <form data-form="add-purchase" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Producto</label>
-              <select name="product_id" required class="border rounded-md px-3 py-2 w-full">
+              <select name="product_id" id="purchase-product" required class="border rounded-md px-3 py-2 w-full">
                 <option value="">Seleccionar producto</option>
                 ${this.products.filter(product => product.category !== 'stickers').map(product => {
                   const needed = stockNeeded[product.id] || 0;
                   const hasAlert = needed > product.stock;
                   return `
-                    <option value="${product.id}">
-                      ${product.name}${hasAlert ? ` ⚠️ (Falta: ${needed - product.stock})` : ''}
+                    <option value="${product.id}" data-cost="${product.cost}">
+                      ${product.name} - Stock: ${product.stock}${hasAlert ? ` ⚠️ (Falta: ${needed - product.stock})` : ''}
                     </option>
                   `;
                 }).join('')}
@@ -1020,7 +1035,7 @@ class App {
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Costo unitario</label>
-              <input type="number" name="unit_cost" step="0.01" required class="border rounded-md px-3 py-2 w-full">
+              <input type="number" name="unit_cost" id="purchase-cost" step="0.01" required class="border rounded-md px-3 py-2 w-full">
             </div>
             <div class="flex items-end">
               <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700 w-full">
