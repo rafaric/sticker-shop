@@ -51,6 +51,10 @@ export interface Product {
   stock: number;
   cost: number;
   size?: string;
+  // dimensiones en mm (opcional) para calcular costos por área
+  width_mm?: number;
+  height_mm?: number;
+  area_mm2?: number;
   created_at: string;
 }
 
@@ -93,6 +97,8 @@ export interface PrintingPlate {
   cost: number;
   small_stickers_quantity: number;
   large_stickers_quantity: number;
+  // cantidades por tamaño (p. ej. { "30x30": 20, "40x60": 10, "chico": 30 })
+  stickers_quantities?: Record<string, number>;
   is_printed: boolean;
   date_created: string;
   date_printed?: string;
@@ -320,7 +326,21 @@ class DatabaseManager {
     const products = await this.getTable('products');
     const productIndex = products.findIndex(p => p.id === purchase.product_id);
     if (productIndex !== -1) {
-      products[productIndex].stock += purchase.quantity;
+      const prod = products[productIndex];
+      const prevStock = prod.stock || 0;
+      const prevCost = prod.cost || 0;
+      const addedQty = purchase.quantity || 0;
+      const addedUnitCost = purchase.unit_cost || 0;
+
+      if (prevStock > 0) {
+        const combinedCost = prevStock * prevCost + addedQty * addedUnitCost;
+        const combinedQty = prevStock + addedQty;
+        prod.cost = combinedQty > 0 ? combinedCost / combinedQty : prevCost;
+      } else {
+        prod.cost = addedUnitCost;
+      }
+
+      prod.stock = prevStock + addedQty;
       await this.setTable('products', products);
     }
 
@@ -333,15 +353,24 @@ class DatabaseManager {
     return plates.sort((a, b) => new Date(b.date_created).getTime() - new Date(a.date_created).getTime());
   }
 
-  async createPrintingPlate(name: string, smallQuantity: number, largeQuantity: number): Promise<number> {
+  async createPrintingPlate(name: string, smallQuantityOrMap: number | Record<string, number>, largeQuantity?: number, cost?: number): Promise<number> {
     const plates = await this.getTable('printing_plates');
     const id = await this.getNextId('printing_plates');
+
+    let stickers_quantities: Record<string, number> = {};
+    if (typeof smallQuantityOrMap === 'number') {
+      stickers_quantities = { chico: smallQuantityOrMap || 0, grande: largeQuantity || 0 };
+    } else {
+      stickers_quantities = smallQuantityOrMap || {};
+    }
+
     const newPlate = {
       id,
       name,
-      cost: 18000,
-      small_stickers_quantity: smallQuantity,
-      large_stickers_quantity: largeQuantity,
+      cost: typeof cost === 'number' ? cost : 18500,
+      small_stickers_quantity: stickers_quantities['chico'] || 0,
+      large_stickers_quantity: stickers_quantities['grande'] || 0,
+      stickers_quantities,
       is_printed: false,
       date_created: new Date().toISOString()
     };
@@ -361,28 +390,228 @@ class DatabaseManager {
     await this.setTable('printing_plates', plates);
     
     const products = await this.getTable('products');
-    const smallStickers = products.filter(p => p.category === 'stickers' && p.name.includes('Chico'));
-    const largeStickers = products.filter(p => p.category === 'stickers' && p.name.includes('Grande'));
-    
-    // Calcular costo por sticker basado en el costo de la plancha
-    const totalStickers = plate.small_stickers_quantity + plate.large_stickers_quantity;
-    const costPerSticker = totalStickers > 0 ? plate.cost / totalStickers : 0;
-    
-    smallStickers.forEach(sticker => {
-      const stockToAdd = Math.floor(plate.small_stickers_quantity / smallStickers.length);
-      sticker.stock += stockToAdd;
-      // Actualizar el costo unitario del sticker
-      sticker.cost = costPerSticker;
+
+    // Distribución de cantidades por tamaño (prefiere el mapa flexible si existe)
+    const countsBySize: Record<string, number> = plate.stickers_quantities || {
+      chico: plate.small_stickers_quantity || 0,
+      grande: plate.large_stickers_quantity || 0
+    };
+
+    // Agrupar productos por tamaño
+    const productsBySize: Record<string, any[]> = {};
+    products.filter(p => p.category === 'stickers').forEach(p => {
+      const key = p.size || 'unknown';
+      productsBySize[key] = productsBySize[key] || [];
+      productsBySize[key].push(p);
     });
-    
-    largeStickers.forEach(sticker => {
-      const stockToAdd = Math.floor(plate.large_stickers_quantity / largeStickers.length);
-      sticker.stock += stockToAdd;
-      // Actualizar el costo unitario del sticker
-      sticker.cost = costPerSticker;
-    });
+
+    // Determinar área por unidad por tamaño (igual que la previsualización)
+    const defaults = { small_mm: 50, large_mm: 100 };
+    const areaPerSize: Record<string, number | undefined> = {};
+    for (const sizeKey of Object.keys(countsBySize)) {
+      let areaUnit: number | undefined = undefined;
+      const items = productsBySize[sizeKey] || [];
+      if (items.length > 0) {
+        const itemWithArea = items.find(it => it.area_mm2 || (it.width_mm && it.height_mm));
+        if (itemWithArea) areaUnit = itemWithArea.area_mm2 ?? (itemWithArea.width_mm && itemWithArea.height_mm ? itemWithArea.width_mm * itemWithArea.height_mm : undefined);
+      }
+
+      if (!areaUnit) {
+        if (String(sizeKey).toLowerCase() === 'chico') areaUnit = defaults.small_mm * defaults.small_mm;
+        else if (String(sizeKey).toLowerCase() === 'grande') areaUnit = defaults.large_mm * defaults.large_mm;
+        else {
+          const m = String(sizeKey).match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/i);
+          if (m) {
+            const w = parseFloat(m[1]);
+            const h = parseFloat(m[2]);
+            areaUnit = w * h;
+          }
+        }
+      }
+      areaPerSize[sizeKey] = areaUnit;
+    }
+
+    // Calcular totalArea usando la cantidad total por tamaño
+    let totalCount = 0;
+    let totalArea = 0;
+    const perProductAssign: Array<{ product: any; qty: number; area?: number }> = [];
+
+    for (const sizeKey of Object.keys(countsBySize)) {
+      const qtyForSize = countsBySize[sizeKey] || 0;
+      let items = productsBySize[sizeKey] || [];
+
+      if (items.length === 0 && qtyForSize > 0) {
+        const newId = await this.getNextId('products');
+        let width_mm: number | undefined = undefined;
+        let height_mm: number | undefined = undefined;
+        let area_mm2: number | undefined = undefined;
+
+        const m = String(sizeKey).match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/i);
+        if (m) {
+          width_mm = parseFloat(m[1]);
+          height_mm = parseFloat(m[2]);
+          area_mm2 = width_mm * height_mm;
+        }
+
+        const newProduct = {
+          id: newId,
+          name: `Sticker ${sizeKey}`,
+          category: 'stickers',
+          price: 0,
+          stock: 0,
+          cost: 0,
+          size: sizeKey,
+          width_mm,
+          height_mm,
+          area_mm2,
+          created_at: new Date().toISOString()
+        } as any;
+
+        products.push(newProduct);
+        productsBySize[sizeKey] = [newProduct];
+        items = productsBySize[sizeKey];
+      }
+
+      const unitArea = areaPerSize[sizeKey];
+      if (unitArea) totalArea += unitArea * qtyForSize;
+      totalCount += qtyForSize;
+
+      const base = items.length > 0 ? Math.floor(qtyForSize / items.length) : 0;
+      let remainder = items.length > 0 ? qtyForSize - base * items.length : 0;
+
+      items.forEach(item => {
+        let area = item.area_mm2 ?? (item.width_mm && item.height_mm ? item.width_mm * item.height_mm : undefined);
+        if (!area) area = unitArea;
+        const assignQty = base + (remainder > 0 ? 1 : 0);
+        if (remainder > 0) remainder--;
+        perProductAssign.push({ product: item, qty: assignQty, area });
+      });
+    }
+
+    if (totalArea > 0) {
+      const costPerArea = plate.cost / totalArea;
+      perProductAssign.forEach(({ product, qty, area }) => {
+        const assignedUnitCost = area ? costPerArea * area : plate.cost / Math.max(1, totalCount);
+        const prevStock = product.stock || 0;
+        const prevCost = product.cost || 0;
+        product.stock += qty;
+        if (prevStock > 0) {
+          product.cost = (prevStock * prevCost + qty * assignedUnitCost) / (prevStock + qty);
+        } else {
+          product.cost = assignedUnitCost;
+        }
+      });
+    } else {
+      const costPerSticker = totalCount > 0 ? plate.cost / totalCount : 0;
+      perProductAssign.forEach(({ product, qty }) => {
+        const assignedUnitCost = costPerSticker;
+        const prevStock = product.stock || 0;
+        const prevCost = product.cost || 0;
+        product.stock += qty;
+        if (prevStock > 0) {
+          product.cost = (prevStock * prevCost + qty * assignedUnitCost) / (prevStock + qty);
+        } else {
+          product.cost = assignedUnitCost;
+        }
+      });
+    }
     
     await this.setTable('products', products);
+    return true;
+  }
+
+  // Preview de la impresión: calcula la asignación y el costo por sticker sin persistir cambios
+  async previewPrintingPlate(plateId: number): Promise<any> {
+    const plates = await this.getTable('printing_plates');
+    const plate = plates.find(p => p.id === plateId);
+    if (!plate) return null;
+
+    const products = await this.getTable('products');
+
+    const countsBySize: Record<string, number> = plate.stickers_quantities || {
+      chico: plate.small_stickers_quantity || 0,
+      grande: plate.large_stickers_quantity || 0
+    };
+
+    // Agrupar productos por tamaño
+    const productsBySize: Record<string, any[]> = {};
+    products.filter(p => p.category === 'stickers').forEach(p => {
+      const key = p.size || 'unknown';
+      productsBySize[key] = productsBySize[key] || [];
+      productsBySize[key].push(p);
+    });
+
+    // Determinar área por tamaño (en mm)
+    const defaults = { small_mm: 50, large_mm: 100 };
+
+    const sizesInfo: Array<{ sizeKey: string; qty: number; area_mm2?: number; products: any[] }> = [];
+
+    for (const sizeKey of Object.keys(countsBySize)) {
+      const qty = countsBySize[sizeKey] || 0;
+      let areaPerUnit: number | undefined = undefined;
+
+      // Buscar un producto existente con área
+      const items = productsBySize[sizeKey] || [];
+      if (items.length > 0) {
+        const itemWithArea = items.find(it => it.area_mm2 || (it.width_mm && it.height_mm));
+        if (itemWithArea) {
+          areaPerUnit = itemWithArea.area_mm2 ?? (itemWithArea.width_mm && itemWithArea.height_mm ? itemWithArea.width_mm * itemWithArea.height_mm : undefined);
+        }
+      }
+
+      // Si no hay área y la clave es 'chico'/'grande', usar default
+      if (!areaPerUnit) {
+        if (String(sizeKey).toLowerCase() === 'chico') areaPerUnit = defaults.small_mm * defaults.small_mm;
+        else if (String(sizeKey).toLowerCase() === 'grande') areaPerUnit = defaults.large_mm * defaults.large_mm;
+        else {
+          // intentar parsear formato '50x30' (mm)
+          const m = String(sizeKey).match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/i);
+          if (m) {
+            const w = parseFloat(m[1]);
+            const h = parseFloat(m[2]);
+            areaPerUnit = w * h;
+          }
+        }
+      }
+
+      sizesInfo.push({ sizeKey, qty, area_mm2: areaPerUnit, products: items });
+    }
+
+    // Calcular total de área
+    const totalArea = sizesInfo.reduce((s, it) => s + ((it.area_mm2 || 0) * it.qty), 0);
+
+    const resultItems: any[] = [];
+
+    if (totalArea > 0) {
+      const costPerArea = plate.cost / totalArea;
+      for (const it of sizesInfo) {
+        const unitArea = it.area_mm2 || 0;
+        const unitCost = unitArea > 0 ? costPerArea * unitArea : 0;
+        resultItems.push({ sizeKey: it.sizeKey, qty: it.qty, unitArea, unitCost, totalCost: unitCost * it.qty, products: it.products });
+      }
+    } else {
+      const totalCount = sizesInfo.reduce((s, it) => s + it.qty, 0);
+      const costPerSticker = totalCount > 0 ? plate.cost / totalCount : 0;
+      for (const it of sizesInfo) {
+        resultItems.push({ sizeKey: it.sizeKey, qty: it.qty, unitArea: it.area_mm2, unitCost: costPerSticker, totalCost: costPerSticker * it.qty, products: it.products });
+      }
+    }
+
+    return {
+      plate: { id: plate.id, name: plate.name, cost: plate.cost },
+      items: resultItems,
+      totalCost: plate.cost
+    };
+  }
+
+  async deletePrintingPlate(plateId: number): Promise<boolean> {
+    const plates = await this.getTable('printing_plates');
+    const index = plates.findIndex((p: any) => p.id === plateId);
+    if (index === -1) return false;
+    const plate = plates[index];
+    if (plate.is_printed) return false;
+    plates.splice(index, 1);
+    await this.setTable('printing_plates', plates);
     return true;
   }
 

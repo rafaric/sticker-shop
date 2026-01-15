@@ -16,8 +16,9 @@ const sampleProducts = [
   { name: 'Totebag Grande', category: 'totebags', price: 4500, stock: 0, cost: 2100, size: 'grande' },
   
   // Stickers (el costo se calcula al imprimir la plancha)
-  { name: 'Sticker Chico', category: 'stickers', price: 300, stock: 0, cost: 0, size: 'chico' },
-  { name: 'Sticker Grande', category: 'stickers', price: 500, stock: 0, cost: 0, size: 'grande' }
+  // Definimos dimensiones para poder calcular costos por área (mm)
+  { name: 'Sticker Chico', category: 'stickers', price: 300, stock: 0, cost: 0, size: 'chico', width_mm: 30, height_mm: 30, area_mm2: 30 * 30 },
+  { name: 'Sticker Grande', category: 'stickers', price: 500, stock: 0, cost: 0, size: 'grande', width_mm: 60, height_mm: 60, area_mm2: 60 * 60 }
 ];
 
 // Función para resetear la base de datos

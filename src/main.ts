@@ -39,6 +39,9 @@ type Product = {
   stock: number;
   cost: number;
   size?: string;
+  width_mm?: number;
+  height_mm?: number;
+  area_mm2?: number;
   created_at: string;
 };
 
@@ -141,10 +144,13 @@ class App {
         await this.buyProduct(parseInt(element.dataset.productId!));
         break;
       case 'print-plate':
-        await this.printPlate(parseInt(element.dataset.plateId!));
+        await this.showPlatePreviewModal(parseInt(element.dataset.plateId!));
+        break;
+      case 'delete-plate':
+        await this.deletePlate(parseInt(element.dataset.plateId!));
         break;
       case 'complete-reservation':
-        await this.completeReservation(parseInt(element.dataset.reservationId!));
+        await this.showCompleteReservationModal(parseInt(element.dataset.reservationId!));
         break;
       case 'cancel-reservation':
         await this.cancelReservation(parseInt(element.dataset.reservationId!));
@@ -262,6 +268,85 @@ class App {
     this.render();
   }
 
+  private async showCompleteReservationModal(reservationId: number) {
+    const reservation = this.reservations.find(r => r.id === reservationId);
+    if (!reservation) return;
+
+    const product = this.products.find(p => p.id === reservation.product_id);
+    if (!product) return await this.completeReservation(reservationId);
+
+    const isTaza = product.name.toLowerCase().includes('taz');
+    if (!isTaza) {
+      await this.completeReservation(reservationId);
+      return;
+    }
+
+    // Construir modal para elegir sticker asociado
+    const stickerProducts = this.products.filter(p => p.category === 'stickers');
+
+    this.closeCompleteReservationModal();
+    const modal = document.createElement('div');
+    modal.id = 'complete-reservation-modal';
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg w-11/12 md:w-1/2 p-6">
+        <h3 class="text-lg font-semibold mb-4">Completar reserva: ${product.name}</h3>
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Seleccionar sticker asociado (incluido en el precio)</label>
+          <select id="assoc-sticker-select" class="border rounded-md px-3 py-2 w-full">
+            <option value="">-- Ninguno (continuar) --</option>
+            ${stickerProducts.map(sp => `<option value="${sp.id}">${sp.name} (Stock: ${sp.stock})</option>`).join('')}
+          </select>
+        </div>
+        <div class="flex justify-end space-x-2">
+          <button id="cancel-complete-reservation" class="px-4 py-2 rounded-md bg-gray-200">Cancelar</button>
+          <button id="confirm-complete-reservation" data-reservation-id="${reservationId}" class="px-4 py-2 rounded-md bg-green-600 text-white">Confirmar</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const cancelBtn = document.getElementById('cancel-complete-reservation');
+    const confirmBtn = document.getElementById('confirm-complete-reservation');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeCompleteReservationModal());
+    if (confirmBtn) confirmBtn.addEventListener('click', async (e) => {
+      const id = parseInt((e.target as HTMLElement).getAttribute('data-reservation-id') || '0');
+      const select = document.getElementById('assoc-sticker-select') as HTMLSelectElement | null;
+      const stickerId = select && select.value ? parseInt(select.value) : null;
+
+      const success = await db.completeReservation(id);
+      if (success) {
+        // Si se eligió sticker, registrar la venta del sticker con precio 0 (incluido en la taza)
+        if (stickerId) {
+          const stickerProduct = this.products.find(p => p.id === stickerId);
+          if (stickerProduct) {
+            await db.addSale({
+              product_id: stickerId,
+              quantity: reservation.quantity,
+              unit_price: 0,
+              unit_cost: stickerProduct.cost,
+              total: 0,
+              reservation_id: reservationId
+            });
+          }
+        }
+        toast.success('Reserva completada y ventas registradas');
+      } else {
+        toast.error('No se pudo completar la reserva');
+      }
+
+      this.closeCompleteReservationModal();
+      await this.loadData();
+      this.render();
+    });
+  }
+
+  private closeCompleteReservationModal() {
+    const existing = document.getElementById('complete-reservation-modal');
+    if (existing) existing.remove();
+  }
+
   private async cancelReservation(reservationId: number) {
     const success = await db.cancelReservation(reservationId);
     if (success) {
@@ -354,8 +439,24 @@ class App {
     const name = formData.get('name') as string;
     const smallQuantity = parseInt(formData.get('small_quantity') as string) || 0;
     const largeQuantity = parseInt(formData.get('large_quantity') as string) || 0;
-    
-    await db.createPrintingPlate(name, smallQuantity, largeQuantity);
+    const plateCost = parseFloat(formData.get('plate_cost') as string) || 18500;
+
+    // Recoger pares de tamaño/cantidad desde inputs dinámicos
+    const keys = formData.getAll('size_key[]') as string[];
+    const qtys = formData.getAll('size_qty[]') as string[];
+    const parsedMap: Record<string, number> = {};
+    for (let i = 0; i < Math.max(keys.length, qtys.length); i++) {
+      const k = (keys[i] || '').toString().trim();
+      const q = parseInt((qtys[i] || '0').toString()) || 0;
+      if (k && q > 0) parsedMap[k] = (parsedMap[k] || 0) + q;
+    }
+
+    // Asegurar que `chico` y `grande` siempre estén presentes en el mapa,
+    // usando los campos específicos como valores por defecto.
+    parsedMap['chico'] = parsedMap.hasOwnProperty('chico') ? parsedMap['chico'] : smallQuantity;
+    parsedMap['grande'] = parsedMap.hasOwnProperty('grande') ? parsedMap['grande'] : largeQuantity;
+
+    await db.createPrintingPlate(name, parsedMap, undefined, plateCost);
     toast.success('Plancha creada exitosamente');
     await this.loadData();
     this.render();
@@ -369,6 +470,29 @@ class App {
       toast.error('No se pudo imprimir la plancha.');
     }
     
+    await this.loadData();
+    this.render();
+  }
+
+  private async deletePlate(plateId: number) {
+    if (!confirm('¿Eliminar plancha? Esta acción no se puede deshacer.')) return;
+    let success = false;
+    try {
+      const res = (db as any).deletePrintingPlate;
+      if (typeof res === 'function') {
+        const maybePromise = (db as any).deletePrintingPlate(plateId);
+        success = maybePromise instanceof Promise ? await maybePromise : maybePromise;
+      }
+    } catch (err) {
+      success = false;
+    }
+
+    if (success) {
+      toast.success('Plancha eliminada');
+    } else {
+      toast.error('No se pudo eliminar la plancha (quizá ya fue impresa)');
+    }
+
     await this.loadData();
     this.render();
   }
@@ -434,6 +558,41 @@ class App {
     
     // Setup autocomplete for price fields
     this.setupPriceAutocomplete();
+    // Setup dynamic inputs for plate creation
+    this.setupPlateFormDynamicInputs();
+  }
+
+  private setupPlateFormDynamicInputs() {
+    const addBtn = document.getElementById('add-size-row');
+    const container = document.getElementById('sizes-container');
+
+    if (!container) return;
+
+    // Attach add button
+    if (addBtn) {
+      addBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const idx = container.querySelectorAll('.size-row').length;
+        const row = document.createElement('div');
+        row.className = 'size-row flex space-x-2 items-center';
+        row.innerHTML = `
+          <input name="size_key[]" placeholder="Tamaño en mm (ej: 50x30 o chico)" class="border rounded-md px-2 py-1 w-2/3" />
+          <input name="size_qty[]" type="number" min="0" placeholder="Cantidad" class="border rounded-md px-2 py-1 w-1/3" />
+          <button class="remove-size text-red-500 ml-2">Eliminar</button>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    // Delegate remove buttons
+    container.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains('remove-size')) {
+        e.preventDefault();
+        const row = target.closest('.size-row');
+        if (row) row.remove();
+      }
+    });
   }
 
   private setupPriceAutocomplete() {
@@ -481,6 +640,65 @@ class App {
         }
       });
     }
+  }
+
+  private async showPlatePreviewModal(plateId: number) {
+    let preview: any = null;
+    try {
+      preview = await (db as any).previewPrintingPlate(plateId);
+    } catch (e) {
+      toast.error('No se pudo generar la previsualización');
+      return;
+    }
+
+    if (!preview) {
+      toast.error('Plancha no encontrada');
+      return;
+    }
+
+    this.closePlatePreviewModal();
+    const modal = document.createElement('div');
+    modal.id = 'plate-preview-modal';
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg w-11/12 md:w-3/4 lg:w-1/2 p-6 max-h-[80vh] overflow-auto">
+        <h3 class="text-lg font-semibold mb-4">Previsualización: ${preview.plate.name} — Costo: $${preview.plate.cost}</h3>
+        <table class="w-full mb-4">
+          <thead>
+            <tr class="text-left text-xs text-gray-500"><th>Tamaño</th><th>Cantidad</th><th>Área (mm²)</th><th>Costo unit.</th><th>Subtotal</th></tr>
+          </thead>
+          <tbody>
+            ${preview.items.map((it: any) => `
+              <tr class="border-t"><td class="py-2">${it.sizeKey}</td><td class="py-2">${it.qty}</td><td class="py-2">${it.unitArea ? it.unitArea.toFixed(2) : '-'}</td><td class="py-2">$${it.unitCost.toFixed(2)}</td><td class="py-2">$${it.totalCost.toFixed(2)}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="flex justify-end space-x-2">
+          <button id="cancel-print-preview" class="px-4 py-2 rounded-md bg-gray-200">Cancelar</button>
+          <button id="confirm-print-preview" data-plate-id="${preview.plate.id}" class="px-4 py-2 rounded-md bg-green-600 text-white">Confirmar impresión</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const cancelBtn = document.getElementById('cancel-print-preview');
+    const confirmBtn = document.getElementById('confirm-print-preview');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this.closePlatePreviewModal());
+    if (confirmBtn) confirmBtn.addEventListener('click', async (e) => {
+      const id = parseInt((e.target as HTMLElement).getAttribute('data-plate-id') || '0');
+      const success = await (db as any).printPlate(id);
+      if (success) toast.success('Plancha impresa y guardada en la base de datos');
+      else toast.error('No se pudo imprimir la plancha');
+      this.closePlatePreviewModal();
+      await this.loadData();
+      this.render();
+    });
+  }
+
+  private closePlatePreviewModal() {
+    const existing = document.getElementById('plate-preview-modal');
+    if (existing) existing.remove();
   }
 
   private renderNavigation() {
@@ -717,6 +935,7 @@ class App {
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Motivo</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Adelanto</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Costo</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
                 </tr>
@@ -844,14 +1063,35 @@ class App {
               <input type="text" name="name" required class="border rounded-md px-3 py-2 w-full">
             </div>
             <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Costo de la plancha ($)</label>
+              <input type="number" name="plate_cost" min="0" value="18500" class="border rounded-md px-3 py-2 w-full">
+              <div class="text-xs text-gray-500 mt-1">Puedes modificar el precio antes de crear la plancha.</div>
+            </div>
+            <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Stickers pequeños${smallPending > 0 ? ` (Faltan: ${smallPending})` : ''}</label>
-              <input type="number" name="small_quantity" min="0" required class="border rounded-md px-3 py-2 w-full">
+              <input type="number" name="small_quantity" min="0" class="border rounded-md px-3 py-2 w-full">
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Stickers grandes${largePending > 0 ? ` (Faltan: ${largePending})` : ''}</label>
-              <input type="number" name="large_quantity" min="0" required class="border rounded-md px-3 py-2 w-full">
+              <input type="number" name="large_quantity" min="0" class="border rounded-md px-3 py-2 w-full">
             </div>
-            <div class="flex items-end">
+
+            <div class="md:col-span-4">
+              <label class="block text-sm font-medium text-gray-700 mb-1">Tamaños y cantidades (en mm — agrega filas)</label>
+              <div id="sizes-container" class="space-y-2 mb-2">
+                <div class="size-row flex space-x-2 items-center">
+                  <input name="size_key[]" placeholder="Tamaño en mm (ej: 50x30 o chico)" class="border rounded-md px-2 py-1 w-2/3" />
+                  <input name="size_qty[]" type="number" min="0" placeholder="Cantidad" class="border rounded-md px-2 py-1 w-1/3" />
+                  <button class="remove-size text-red-500 ml-2">Eliminar</button>
+                </div>
+              </div>
+              <div class="flex space-x-2">
+                <button id="add-size-row" class="bg-blue-600 text-white px-3 py-1 rounded-md">Agregar tamaño</button>
+                <div class="text-xs text-gray-500">Si agregas filas, se usarán para definir las cantidades por tamaño; si dejas las filas vacías, se usarán los campos "Stickers pequeños" y "Stickers grandes".</div>
+              </div>
+            </div>
+
+            <div class="flex items-end md:col-span-4">
               <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700 w-full">
                 Crear Plancha
               </button>
@@ -870,16 +1110,26 @@ class App {
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nombre</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stickers Pequeños</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stickers Grandes</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stickers Especiales</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Costo</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200">
-                ${this.printingPlates.map(plate => `
+                ${this.printingPlates.map(plate => {
+                  const counts = plate.stickers_quantities || { chico: plate.small_stickers_quantity || 0, grande: plate.large_stickers_quantity || 0 };
+                  const chicoCount = counts['chico'] || 0;
+                  const grandeCount = counts['grande'] || 0;
+                  const specialTotal = Object.entries(counts).filter(([k]) => k !== 'chico' && k !== 'grande').reduce((s: number, [,v]) => s + (Number(v) || 0), 0);
+                  const specialsDisplay = specialTotal > 0 ? specialTotal : '';
+                  return `
                   <tr>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${plate.name}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${plate.small_stickers_quantity}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${plate.large_stickers_quantity}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${chicoCount}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${grandeCount}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${specialsDisplay}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${plate.cost ? '$' + plate.cost.toLocaleString() : ''}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                         plate.is_printed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
@@ -888,15 +1138,21 @@ class App {
                       </span>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      ${!plate.is_printed ? `
-                        <button data-action="print-plate" data-plate-id="${plate.id}" 
-                                class="text-green-600 hover:text-green-900">
-                          Imprimir ($18,000)
-                        </button>
-                      ` : ''}
+                                    ${!plate.is_printed ? `
+                                      <div class="flex items-center gap-3">
+                                        <button data-action="print-plate" data-plate-id="${plate.id}" 
+                                                class="text-green-600 hover:text-green-900">
+                                          Imprimir (${plate.cost ? '$' + plate.cost.toLocaleString() : ''})
+                                        </button>
+                                        <button data-action="delete-plate" data-plate-id="${plate.id}" 
+                                                class="text-red-600 hover:text-red-900">
+                                          Eliminar
+                                        </button>
+                                      </div>
+                                    ` : ''}
                     </td>
                   </tr>
-                `).join('')}
+                `}).join('')}
               </tbody>
             </table>
           </div>
